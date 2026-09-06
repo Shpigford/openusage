@@ -169,7 +169,13 @@ struct SQLiteCLIAccessor: SQLiteAccessing {
         // A normal sqlite3 open can create a missing database. Credential probes must be read-only and
         // side-effect free, so absence returns nil before a process is launched.
         guard try databaseExists(path) else { return nil }
-        let result = try run(path: path, sql: sql, readOnly: true)
+        var result = try run(path: path, sql: sql, mode: .readOnly)
+        // A WAL-mode database whose -shm file cannot be opened read-only fails to open under
+        // -readonly. Retry with a connection that may set up the WAL sidecars but is still refused any
+        // write by `PRAGMA query_only`; a genuine error fails the same way again.
+        if !result.succeeded {
+            result = try run(path: path, sql: sql, mode: .queryOnly)
+        }
         guard result.succeeded else {
             throw SQLiteError.queryFailed(result.stderr)
         }
@@ -184,9 +190,17 @@ struct SQLiteCLIAccessor: SQLiteAccessing {
         }
     }
 
-    private func run(path: String, sql: String, readOnly: Bool = false) throws -> ProcessResult {
+    private enum OpenMode {
+        case readWrite, readOnly, queryOnly
+    }
+
+    private func run(path: String, sql: String, mode: OpenMode = .readWrite) throws -> ProcessResult {
         var arguments = ["-batch", "-noheader"]
-        if readOnly { arguments.append("-readonly") }
+        switch mode {
+        case .readWrite: break
+        case .readOnly: arguments.append("-readonly")
+        case .queryOnly: arguments += ["-cmd", "PRAGMA query_only = ON"]
+        }
         arguments += [
             "-cmd", ".timeout 1000",
             expandHome(path),

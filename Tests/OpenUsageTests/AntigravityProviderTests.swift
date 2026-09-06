@@ -305,7 +305,7 @@ final class AntigravityProviderTests: XCTestCase {
             authStore: AntigravityAuthStore(keychain: FakeKeychain(wrapped), files: FakeFiles()),
             usageClient: AntigravityUsageClient(lsHTTP: routing, http: routing),
             discovery: LanguageServerDiscovery(processRunner: EmptyProcessRunner()),
-            dbUsageScanner: AntigravityDbUsageScanner(conversationsDirectory: { "/nonexistent-antigravity-tests" })
+            dbUsageScanner: AntigravityDbUsageScanner(conversationsDirectories: { ["/nonexistent-antigravity-tests"] })
         )
     }
 

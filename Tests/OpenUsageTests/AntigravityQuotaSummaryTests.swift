@@ -175,7 +175,7 @@ final class AntigravityQuotaSummaryTests: XCTestCase {
             authStore: AntigravityAuthStore(keychain: FakeKeychain(wrapped), files: FakeFiles()),
             usageClient: AntigravityUsageClient(lsHTTP: routing, http: routing),
             discovery: LanguageServerDiscovery(processRunner: NoProcessRunner()),
-            dbUsageScanner: AntigravityDbUsageScanner(conversationsDirectory: { "/nonexistent-antigravity-tests" })
+            dbUsageScanner: AntigravityDbUsageScanner(conversationsDirectories: { ["/nonexistent-antigravity-tests"] })
         )
     }
 
@@ -233,7 +233,7 @@ final class AntigravityQuotaSummaryTests: XCTestCase {
             authStore: AntigravityAuthStore(keychain: FakeKeychain(nil), files: FakeFiles()),
             usageClient: AntigravityUsageClient(lsHTTP: routing, http: routing),
             discovery: LanguageServerDiscovery(processRunner: FakeLSProcessRunner()),
-            dbUsageScanner: AntigravityDbUsageScanner(conversationsDirectory: { "/nonexistent-antigravity-tests" })
+            dbUsageScanner: AntigravityDbUsageScanner(conversationsDirectories: { ["/nonexistent-antigravity-tests"] })
         )
     }
 

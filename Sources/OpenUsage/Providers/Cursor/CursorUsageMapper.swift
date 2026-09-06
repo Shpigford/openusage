@@ -325,7 +325,8 @@ enum CursorUsageMapper {
             costByDay[day, default: 0] += cost
             tokensByDay[day, default: 0] += row.tokens.totalTokens
             let modelName = model.isEmpty ? ModelUsageEntry.unattributedModelName : model
-            let family = model.isEmpty ? modelName : familyName(for: model, pricing: pricing)
+            // `-fast` folds into the base family (`gpt-5.5-extra-high-fast` -> `gpt-5.5-fast` -> `gpt-5.5`).
+            let family = model.isEmpty ? modelName : pricing.familyName(for: model, stripping: ["-fast"])
             modelsByDay[day, default: [:]][family, default: ModelAccumulator()].add(
                 variant: modelName,
                 tokens: row.tokens.totalTokens,
@@ -364,16 +365,6 @@ enum CursorUsageMapper {
             modelUsage: modelUsage,
             unknownModelsByDay: unknownModelsByDay
         )
-    }
-
-    /// The display family for a raw CSV slug: its canonical pricing key with a `-fast` suffix folded
-    /// into the base (`gpt-5.5-extra-high-fast` → `gpt-5.5-fast` → `gpt-5.5`). Slugs no alias rule
-    /// knows keep their raw name — a wrong guess would silently merge unrelated models.
-    private static func familyName(for model: String, pricing: ModelPricing) -> String {
-        let canonical = pricing.supplement.canonicalName(for: model) ?? model
-        guard canonical.hasSuffix("-fast") else { return canonical }
-        let base = String(canonical.dropLast("-fast".count))
-        return base.isEmpty ? canonical : base
     }
 
     private struct ModelAccumulator {

@@ -1,202 +1,116 @@
 import XCTest
 @testable import OpenUsage
 
-/// Synthetic protobuf fixtures follow FelixIsaac's original regression coverage in openusage#1058.
-private func antigravityVarint(_ value: UInt64) -> [UInt8] {
-    var remaining = value
-    var encoded: [UInt8] = []
-    repeat {
-        var byte = UInt8(remaining & 0x7f)
-        remaining >>= 7
-        if remaining != 0 { byte |= 0x80 }
-        encoded.append(byte)
-    } while remaining != 0
-    return encoded
-}
-
-private func antigravityVarintField(_ number: UInt32, _ value: UInt64) -> [UInt8] {
-    antigravityVarint(UInt64(number) << 3) + antigravityVarint(value)
-}
-
-private func antigravityBytesField(_ number: UInt32, _ bytes: [UInt8]) -> [UInt8] {
-    antigravityVarint(UInt64(number) << 3 | 2) + antigravityVarint(UInt64(bytes.count)) + bytes
-}
-
-private func antigravityGenerationBlob(
-    model: String?,
-    input: UInt64,
-    output: UInt64,
-    cacheRead: UInt64 = 0,
-    systemPrompt: UInt64 = 0,
-    timestamp: UInt64?
-) -> [UInt8] {
-    let usage = antigravityVarintField(1, systemPrompt)
-        + antigravityVarintField(2, input)
-        + antigravityVarintField(3, output)
-        + antigravityVarintField(5, cacheRead)
-
-    var event: [UInt8] = []
-    if let model {
-        event += antigravityBytesField(19, Array(model.utf8))
-    }
-    event += antigravityBytesField(4, usage)
-
-    if let timestamp {
-        let wallClock = antigravityVarintField(1, timestamp)
-        event += antigravityBytesField(9, antigravityBytesField(4, wallClock))
-    }
-    return antigravityBytesField(1, event)
-}
-
-private struct AntigravityFixtureRow: Sendable {
-    var index: Int
-    var blob: [UInt8]?
-}
-
-private final class AntigravityFakeSQLite: SQLiteAccessing, @unchecked Sendable {
-    private let lock = NSLock()
-    private var rowsByPath: [String: [AntigravityFixtureRow]]
-    private var cursors: [Int] = []
-    let failingPaths: Set<String>
-    let cancellingPath: String?
-
-    init(rowsByPath: [String: [AntigravityFixtureRow]] = [:], failingPaths: Set<String> = [], cancellingPath: String? = nil) {
-        self.rowsByPath = rowsByPath
-        self.failingPaths = failingPaths
-        self.cancellingPath = cancellingPath
-    }
-
-    func queryValue(path: String, sql: String) throws -> String? {
-        lock.lock()
-        defer { lock.unlock() }
-
-        if failingPaths.contains(path) {
-            throw SQLiteError.queryFailed("database locked")
-        }
-        if path == cancellingPath { withUnsafeCurrentTask { $0?.cancel() } }
-        let marker = "WHERE idx > "
-        guard let markerRange = sql.range(of: marker),
-              let cursor = Int(sql[markerRange.upperBound...].split(whereSeparator: \.isWhitespace).first ?? "")
-        else {
-            throw SQLiteError.queryFailed("missing batch cursor")
-        }
-        cursors.append(cursor)
-
-        let rows: [[String: Any]] = rowsByPath[path, default: []]
-            .filter { $0.index > cursor }
-            .sorted { $0.index < $1.index }
-            .prefix(AntigravityDbUsageScanner.batchSize)
-            .map { row in
-                let value: Any = row.blob.map { bytes in
-                    bytes.map { String(format: "%02x", $0) }.joined()
-                } ?? NSNull()
-                return ["index": row.index, "hex": value]
-            }
-
-        let json = try JSONSerialization.data(withJSONObject: rows)
-        return String(decoding: json, as: UTF8.self)
-    }
-
-    func append(_ row: AntigravityFixtureRow, to path: String) {
-        lock.withLock { rowsByPath[path, default: []].append(row) }
-    }
-
-    var queriedCursors: [Int] {
-        lock.withLock { cursors }
-    }
-
-    func execute(path: String, sql: String) throws {}
-}
-
-final class AntigravityProtoDecoderTests: XCTestCase {
-    func testDecodeVarintsAndRejectMalformedValues() {
-        XCTAssertEqual(AntigravityProtoDecoder.decodeVarint([0x05])?.value, 5)
-        XCTAssertEqual(AntigravityProtoDecoder.decodeVarint([0xac, 0x02])?.value, 300)
-        XCTAssertNil(AntigravityProtoDecoder.decodeVarint([0x80]))
-        XCTAssertNil(AntigravityProtoDecoder.decodeVarint(Array(repeating: 0xff, count: 11)))
-        XCTAssertNil(AntigravityProtoDecoder.decodeVarint(Array(repeating: 0xff, count: 9) + [0x02]))
-    }
-
-    func testMalformedLengthCannotOverflowOrTrap() {
-        let validField = antigravityVarintField(1, 42)
-        let oversizedLength = antigravityVarint(UInt64(2) << 3 | 2) + antigravityVarint(UInt64.max)
-        let fields = validField + oversizedLength
-
-        XCTAssertEqual(AntigravityProtoDecoder.varintField(1, in: fields), 42)
-        XCTAssertNil(AntigravityProtoDecoder.bytesField(2, in: fields))
-    }
-
-    func testExtractsCompleteGenerationRecord() throws {
-        let blob = antigravityGenerationBlob(
-            model: "gemini-3.1-pro-low",
-            input: 1_000,
-            output: 200,
-            cacheRead: 50,
-            systemPrompt: 1_132,
-            timestamp: 1_800_000_000
-        )
-        let event = try XCTUnwrap(AntigravityProtoDecoder.generationEvent(from: blob))
-
-        XCTAssertEqual(event.model, "gemini-3.1-pro-low")
-        XCTAssertEqual(event.inputTokens, 2_132)
-        XCTAssertEqual(event.outputTokens, 200)
-        XCTAssertEqual(event.cacheReadTokens, 50)
-        XCTAssertEqual(event.timestampSeconds, 1_800_000_000)
-    }
-
-    func testRejectsMissingTimestampZeroUsageAndUnrepresentableCounts() {
-        let missingTimestamp = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 1, output: 0, timestamp: nil)
-        let zeroUsage = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 0, output: 0, timestamp: 1_800_000_000)
-        let overflowingTokens = antigravityGenerationBlob(model: "gemini-3.6-flash", input: UInt64.max, output: 0, timestamp: 1_800_000_000)
-        let overflowingSystemPrompt = antigravityGenerationBlob(
-            model: "gemini-3.6-flash", input: UInt64(Int.max), output: 0,
-            systemPrompt: 1, timestamp: 1_800_000_000
-        )
-
-        XCTAssertNil(AntigravityProtoDecoder.generationEvent(from: missingTimestamp))
-        XCTAssertNil(AntigravityProtoDecoder.generationEvent(from: zeroUsage))
-        XCTAssertNil(AntigravityProtoDecoder.generationEvent(from: overflowingTokens))
-        XCTAssertNil(AntigravityProtoDecoder.generationEvent(from: overflowingSystemPrompt))
-        XCTAssertNil(AntigravityProtoDecoder.generationEvent(from: [0xff, 0xff, 0xff]))
-    }
-}
-
 final class AntigravityDbUsageScannerTests: XCTestCase {
-    private let now = OpenUsageISO8601.date(from: "2026-07-27T12:00:00.000Z")!
-    private let pricing = ModelPricing(
-        supplement: PricingSupplement(),
-        primary: PricingCatalog(entries: [
-            "gemini-3.6-flash": ModelRates(
-                inputPerMillion: 1,
-                outputPerMillion: 4,
-                cacheWritePerMillion: 1,
-                cacheReadPerMillion: 0.25
-            )
-        ]),
-        secondary: PricingCatalog()
-    )
+    private let now = antigravityNow
+    private let pricing = antigravityPricing
 
     private func makeDatabaseDirectory(fileNames: [String] = ["conversation.db"]) throws -> (url: URL, paths: [String]) {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        let paths = try fileNames.map { name in
-            let url = directory.appendingPathComponent(name)
-            try Data().write(to: url)
-            return url.path
-        }
-        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
-        return (directory, paths)
+        try makeAntigravityDatabaseDirectory(for: self, fileNames: fileNames)
     }
 
     func testMissingDatabaseDirectoryReturnsNil() async {
         let scanner = AntigravityDbUsageScanner(
             sqlite: AntigravityFakeSQLite(),
-            conversationsDirectory: { "/nonexistent-\(UUID().uuidString)" }
+            conversationsDirectories: { ["/nonexistent-\(UUID().uuidString)"] }
         )
 
         let result = await scanner.scan(now: now, pricing: pricing)
         XCTAssertNil(result)
+    }
+
+    func testPlaceholderFallsBackToThePricedIDWhenTheLabelIsUnpriced() async throws {
+        let fixture = try makeDatabaseDirectory()
+        let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
+        let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [
+            .init(index: 0, blob: antigravityGenerationBlob(
+                model: "gemini-pro-default", input: 10, output: 5, label: "Gemini 9 Mystery (High)", timestamp: timestamp
+            )),
+        ]])
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
+
+        let result = await scanner.scan(now: now, pricing: TestPricing.bundled)
+        let scan = try XCTUnwrap(result)
+        XCTAssertTrue(scan.unknownModelsByDay.isEmpty)
+        XCTAssertEqual(scan.modelUsage?.daily.first?.models.map(\.model), ["gemini-3.1-pro"])
+    }
+
+    func testBreakdownRowsFoldEffortVariantsLabelsAndPlaceholdersIntoOneFamily() async throws {
+        let fixture = try makeDatabaseDirectory()
+        let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
+        let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [
+            .init(index: 0, blob: antigravityGenerationBlob(model: "gemini-3.1-pro-low", input: 10, output: 0, timestamp: timestamp)),
+            .init(index: 1, blob: antigravityGenerationBlob(
+                model: "gemini-pro-default", input: 5, output: 0, label: "Gemini 3.1 Pro (High)", timestamp: timestamp
+            )),
+            .init(index: 2, blob: antigravityGenerationBlob(model: "gemini-pro-agent", input: 1, output: 0, timestamp: timestamp)),
+            .init(index: 3, blob: antigravityGenerationBlob(model: "gemini-3.7-flash-exp-a", input: 2, output: 0, timestamp: timestamp)),
+            .init(index: 4, blob: antigravityGenerationBlob(model: "gemini-3.7-flash-tiered", input: 3, output: 0, timestamp: timestamp)),
+        ]])
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
+
+        let result = await scanner.scan(now: now, pricing: TestPricing.bundled)
+        let scan = try XCTUnwrap(result)
+        // Breakdown rows carry no inherent order; the history aggregator sorts them for display.
+        let models = try XCTUnwrap(scan.modelUsage?.daily.first?.models)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: models.map { ($0.model, $0.totalTokens) }),
+            ["gemini-3.1-pro": 16, "gemini-3.7-flash": 5]
+        )
+    }
+
+    func testBookkeepingRowsDoNotRaiseTheUnknownModelWarning() async throws {
+        let fixture = try makeDatabaseDirectory()
+        let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
+        let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [
+            .init(index: 0, blob: antigravityGenerationBlob(model: nil, input: 0, output: 0, systemPrompt: 1_036, timestamp: timestamp)),
+            .init(index: 1, blob: antigravityGenerationBlob(
+                model: "gemini-default", input: 10, output: 5, label: "Gemini 3.6 Flash (High)", timestamp: timestamp
+            )),
+        ]])
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
+
+        // The bundled supplement carries the display-label alias rules under test.
+        let result = await scanner.scan(now: now, pricing: TestPricing.bundled)
+        let scan = try XCTUnwrap(result)
+        XCTAssertTrue(scan.unknownModelsByDay.isEmpty)
+        XCTAssertEqual(scan.modelUsage?.daily.first?.models.map(\.model), ["gemini-3.6-flash"])
+        XCTAssertEqual(scan.series.daily.first?.totalTokens, 15)
+    }
+
+    func testTieredSubagentModelsFoldIntoTheBaseModelRow() async throws {
+        let fixture = try makeDatabaseDirectory()
+        let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
+        let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [
+            .init(index: 0, blob: antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 0, timestamp: timestamp)),
+            .init(index: 1, blob: antigravityGenerationBlob(model: "gemini-3.6-flash-tiered", input: 5, output: 0, timestamp: timestamp)),
+        ]])
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
+
+        let result = await scanner.scan(now: now, pricing: pricing)
+        let scan = try XCTUnwrap(result)
+        let models = try XCTUnwrap(scan.modelUsage?.daily.first?.models)
+        XCTAssertEqual(models.map(\.model), ["gemini-3.6-flash"])
+        XCTAssertEqual(scan.series.daily.first?.totalTokens, 15)
+    }
+
+    func testScansEveryConversationDirectoryAndSkipsMissingOnes() async throws {
+        let cli = try makeDatabaseDirectory()
+        let ide = try makeDatabaseDirectory()
+        let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
+        let sqlite = AntigravityFakeSQLite(rowsByPath: [
+            cli.paths[0]: [.init(index: 0, blob: antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 0, timestamp: timestamp))],
+            ide.paths[0]: [.init(index: 0, blob: antigravityGenerationBlob(model: "gemini-3.6-flash", input: 5, output: 0, timestamp: timestamp))],
+        ])
+        let scanner = AntigravityDbUsageScanner(
+            sqlite: sqlite,
+            conversationsDirectories: { [cli.url.path, "/nonexistent-\(UUID().uuidString)", ide.url.path] }
+        )
+
+        let result = await scanner.scan(now: now, pricing: pricing)
+        let scan = try XCTUnwrap(result)
+        XCTAssertEqual(scan.series.daily.count, 1)
+        XCTAssertEqual(scan.series.daily.first?.totalTokens, 15)
     }
 
     func testAccumulatesGenerationTokensCacheReadsAndEstimatedCost() async throws {
@@ -211,7 +125,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
             timestamp: timestamp
         )
         let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [.init(index: 0, blob: blob)]])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
 
         let result = await scanner.scan(now: now, pricing: pricing)
         let scan = try XCTUnwrap(result)
@@ -227,7 +141,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         let rowCount = AntigravityDbUsageScanner.batchSize * 2 + 1
         let rows = (0..<rowCount).map { AntigravityFixtureRow(index: $0 * 2, blob: blob) }
         let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: rows])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
 
         let result = await scanner.scan(now: now, pricing: pricing)
         let scan = try XCTUnwrap(result)
@@ -240,7 +154,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         let first = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 5, timestamp: timestamp)
         let second = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 20, output: 10, timestamp: timestamp)
         let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [.init(index: 0, blob: first)]])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
 
         _ = await scanner.scan(now: now, pricing: pricing)
         _ = await scanner.scan(now: now, pricing: pricing)
@@ -266,7 +180,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         let timestamp = UInt64(now.timeIntervalSince1970) - 3_600
         let original = antigravityGenerationBlob(model: "gemini-3.6-flash", input: 10, output: 5, timestamp: timestamp)
         let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [.init(index: 0, blob: original)]])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
         try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: fixture.paths[0])
 
         _ = await scanner.scan(now: now, pricing: pricing)
@@ -300,14 +214,14 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
             .init(index: 1, blob: missing),
             .init(index: 2, blob: expired)
         ]])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
 
         let result = await scanner.scan(now: now, pricing: pricing)
         let scan = try XCTUnwrap(result)
         XCTAssertTrue(scan.series.daily.isEmpty)
         XCTAssertEqual(
             Set(scan.unknownModelsByDay.values.flatMap { $0 }),
-            ["gemini-9-mystery", AntigravityProtoDecoder.GenerationEvent.unknownModel]
+            ["gemini-9-mystery", AntigravityDbUsageScanner.unknownModel]
         )
     }
 
@@ -322,7 +236,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         ]])
         let scanner = AntigravityDbUsageScanner(
             sqlite: sqlite,
-            conversationsDirectory: { fixture.url.path },
+            conversationsDirectories: { [fixture.url.path] },
             oversizedBlobWarning: { _ in _ = recorder.next() }
         )
 
@@ -347,7 +261,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
         )
         let scanner = AntigravityDbUsageScanner(
             sqlite: sqlite,
-            conversationsDirectory: { fixture.url.path },
+            conversationsDirectories: { [fixture.url.path] },
             readFailureWarning: { _ in _ = recorder.next() }
         )
 
@@ -365,7 +279,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
             cancellingPath: fixture.paths[1]
         )
         let cancellableScanner = AntigravityDbUsageScanner(
-            sqlite: cancellableSQLite, conversationsDirectory: { fixture.url.path }
+            sqlite: cancellableSQLite, conversationsDirectories: { [fixture.url.path] }
         )
         let (fixedNow, fixedPricing) = (now, pricing)
         let cancelled = await Task { await cancellableScanner.scan(now: fixedNow, pricing: fixedPricing) }.value
@@ -375,10 +289,17 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
     func testBatchSQLBoundsRowsAndSkipsOversizedBlobsBeforeHexExpansion() {
         let sql = AntigravityDbUsageScanner.dataSQL(after: 42)
 
+        let limit = AntigravityDbUsageScanner.maximumBlobBytes
+
         XCTAssertTrue(sql.contains("WHERE idx > 42 AND data IS NOT NULL"))
         XCTAssertTrue(sql.contains("LIMIT \(AntigravityDbUsageScanner.batchSize)"))
-        XCTAssertTrue(sql.contains("length(data) <= \(AntigravityDbUsageScanner.maximumBlobBytes)"))
-        XCTAssertTrue(sql.contains("THEN hex(data) ELSE NULL"))
+        XCTAssertTrue(sql.contains("length(g.data) <= \(limit)"))
+        XCTAssertTrue(sql.contains("THEN hex(g.data) ELSE NULL"))
+        XCTAssertTrue(sql.contains("length(metadata) <= \(limit) THEN hex(metadata) ELSE NULL END FROM steps WHERE idx = g.idx"))
+
+        let legacySQL = AntigravityDbUsageScanner.dataSQL(after: 42, includeSteps: false)
+        XCTAssertTrue(legacySQL.contains("THEN hex(g.data) ELSE NULL END))"))
+        XCTAssertFalse(legacySQL.contains("steps"))
     }
 
     @MainActor
@@ -394,7 +315,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
             timestamp: timestamp
         )
         let sqlite = AntigravityFakeSQLite(rowsByPath: [fixture.paths[0]: [.init(index: 0, blob: blob)]])
-        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectory: { fixture.url.path })
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [fixture.url.path] })
 
         let routing = RoutingHTTPClient { request in
             if request.url.path.contains("retrieveUserQuotaSummary") {

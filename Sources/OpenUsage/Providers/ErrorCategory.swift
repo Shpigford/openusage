@@ -172,6 +172,26 @@ extension CopilotUsageError: CategorizedError {
     }
 }
 
+extension OllamaAuthError: CategorizedError {
+    var errorCategory: ErrorCategory {
+        switch self {
+        case .missingKey, .notSignedIn: .notLoggedIn
+        case .keyUnreadable: .credentialAccess
+        case .invalidKey: .authInvalid
+        }
+    }
+}
+
+extension OllamaUsageError: CategorizedError {
+    var errorCategory: ErrorCategory {
+        switch self {
+        case .connectionFailed: .network
+        case .invalidResponse: .decoding
+        case .requestFailed(let status): ErrorCategory.http(status)
+        }
+    }
+}
+
 extension OpenCodeUsageError: CategorizedError {
     var errorCategory: ErrorCategory {
         switch self {

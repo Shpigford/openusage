@@ -1,6 +1,6 @@
 {
   "$comment": "OpenUsage pricing supplement. Prices Cursor-native models that no public catalog carries, supplies fast-variant multipliers the catalogs omit, and maps provider log/CSV model slugs to canonical pricing keys (LiteLLM keys, models.dev ids, or entries in this file). Cursor Router rows name the routed model in prose instead of a slug ('Opus 5 (Auto Balanced)'), so those labels get alias rules too. Published to gh-pages by .github/workflows/pricing-supplement.yml on every change, so installed apps pick edits up within about an hour - no release needed. Rates are USD per million tokens. Sources: https://cursor.com/docs/models-and-pricing.md for Cursor-native entries; https://platform.claude.com/docs/en/about-claude/pricing for Claude Fable 5.1; https://developers.openai.com/api/docs/models/daybreak-blue-latest and https://developers.openai.com/api/docs/pricing for Daybreak aliases and rates; https://docs.z.ai/guides/overview/pricing for GLM 5.3.",
-  "updated_at": "2026-09-01T20:30:00Z",
+  "updated_at": "2026-09-04T11:08:53Z",
   "pricing": {
     "auto": {
       "input_per_million": 1.25,
@@ -146,6 +146,13 @@
       "cache_read_per_million": 0.5,
       "output_per_million": 30.0
     },
+    "gpt-6-astra": {
+      "$comment": "OpenAI GPT-6 Astra official rates (developers.openai.com/api/docs/models/gpt-6-astra). Cache write is 1.25x input; cache read is 0.1x. Fast mode is 2x. Public catalogs have not added it yet.",
+      "input_per_million": 10.0,
+      "cache_write_per_million": 12.5,
+      "cache_read_per_million": 1.0,
+      "output_per_million": 50.0
+    },
     "gpt-5.6-terra": {
       "input_per_million": 2.0,
       "cache_write_per_million": 2.5,
@@ -171,6 +178,13 @@
       "cache_write_per_million": 0.75,
       "cache_read_per_million": 0.075,
       "output_per_million": 3.75
+    },
+    "gemini-3.8-flash": {
+      "$comment": "Google Gemini 3.8 Flash introductory API rates through 2026-12-31 (https://ai.google.dev/gemini-api/docs/pricing), also listed by models.dev. Cursor's table lists output at $3.50; use Google's $3.75 API rate, consistent with Gemini 3.7. Bundled catalogs do not carry this model yet. Cache write is unpublished, so it defaults to input.",
+      "input_per_million": 0.75,
+      "cache_write_per_million": 0.75,
+      "cache_read_per_million": 0.075,
+      "output_per_million": 3.75
     }
   },
   "fast_multipliers": {
@@ -184,6 +198,7 @@
     "gpt-5.4": 2.0,
     "gpt-5.5": 2.5,
     "gpt-5.6-sol": 2.0,
+    "gpt-6-astra": 2.0,
     "gpt-5.6-terra": 2.0,
     "gpt-5.6-luna": 2.0
   },
@@ -223,6 +238,8 @@
     { "pattern": "^claude-opus-4-7(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-opus-4-7" },
     { "pattern": "^claude-opus-4-8(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?-fast$", "canonical": "claude-opus-4-8-fast" },
     { "pattern": "^claude-opus-4-8(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-opus-4-8" },
+    { "pattern": "^claude-opus-4-6(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-opus-4-6" },
+    { "pattern": "^claude-sonnet-4-6(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-sonnet-4-6" },
     { "pattern": "^claude-opus-5(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?-fast$", "canonical": "claude-opus-5-fast" },
     { "pattern": "^claude-opus-5(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-opus-5" },
     { "pattern": "^claude-fable-5[.-]1(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-fable-5.1" },
@@ -230,11 +247,13 @@
     { "pattern": "^claude-sonnet-5(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-sonnet-5" },
     { "pattern": "^gemini-2\\.5-flash(?:-(?:none|low|medium|high|xhigh))?$", "canonical": "gemini-2.5-flash" },
     { "pattern": "^gemini-3-flash(?:-(?:a|b|c))?(?:-preview)?(?:-(?:none|low|medium|high|xhigh))?(?:-preview)?$", "canonical": "gemini-3-flash-preview" },
-    { "pattern": "^gemini-3\\.5-flash(?:-preview)?(?:-(?:none|low|medium|high|xhigh))?(?:-preview)?$", "canonical": "gemini-3.5-flash" },
-    { "pattern": "^gemini-3\\.6-flash(?:-preview)?(?:-(?:none|low|medium|high|xhigh))?(?:-preview)?$", "canonical": "gemini-3.6-flash" },
-    { "pattern": "^gemini-3\\.7-flash(?:-preview)?(?:-(?:none|low|medium|high|xhigh))?(?:-preview)?$", "canonical": "gemini-3.7-flash" },
+    { "pattern": "^gemini-3\\.5-flash(?:-exp-[a-z])?(?:-preview)?(?:-(?:none|low|medium|high|xhigh))?(?:-preview)?$", "canonical": "gemini-3.5-flash" },
+    { "pattern": "^gemini-3\\.6-flash(?:-exp-[a-z])?(?:-preview)?(?:-(?:none|low|medium|high|xhigh))?(?:-preview)?$", "canonical": "gemini-3.6-flash" },
+    { "pattern": "^gemini-3\\.7-flash(?:-exp-[a-z])?(?:-preview)?(?:-(?:none|low|medium|high|xhigh))?(?:-preview)?$", "canonical": "gemini-3.7-flash" },
+    { "pattern": "^gemini-3\\.8-flash(?:-exp-[a-z])?(?:-preview)?(?:-(?:none|low|medium|high|xhigh))?(?:-preview)?$", "canonical": "gemini-3.8-flash" },
     { "pattern": "^gemini-3-pro(?=-)(?:-preview)?(?:-(?:none|low|medium|high|xhigh))?(?:-preview)?$", "canonical": "gemini-3-pro-preview" },
     { "pattern": "^gemini-3\\.1-pro(?:-preview)?(?:-(?:none|low|medium|high|xhigh))?(?:-preview)?$", "canonical": "gemini-3.1-pro-preview" },
+    { "$comment": "Antigravity internal IDs for Gemini 3.1 Pro: gemini-pro-agent is the High-effort wire ID (pi-antigravity routing table, OmniRoute#3696) and gemini-pro-default is the CLI's label when the picker is on its default, which resolves to Gemini 3.1 Pro (High) via the display label; the slug alone covers records without one. gemini-default is deliberately unaliased: its label has pointed at 3.5 Flash and 3.6 Flash over time.", "pattern": "^gemini-pro-(?:default|agent)$", "canonical": "gemini-3.1-pro-preview" },
     { "pattern": "^gpt-5(?:-(?:low|high))?-fast$", "canonical": "gpt-5-fast" },
     { "pattern": "^gpt-5(?:-(?:low|high))?$", "canonical": "gpt-5" },
     { "pattern": "^gpt-5\\.1(?:-(?:low|high))?-fast$", "canonical": "gpt-5-fast" },
@@ -268,6 +287,8 @@
     { "pattern": "^gpt-5\\.5(?:-(?:low|medium|high|xhigh|extra-high))?$", "canonical": "gpt-5.5" },
     { "pattern": "^gpt-5\\.6-sol(?:-(?:none|low|medium|high|xhigh|max|ultra))?-fast$", "canonical": "gpt-5.6-sol-fast" },
     { "pattern": "^gpt-5\\.6-sol(?:-(?:none|low|medium|high|xhigh|max|ultra))?$", "canonical": "gpt-5.6-sol" },
+    { "pattern": "^gpt-6-astra(?:-(?:none|low|medium|high|xhigh|max|ultra))?-fast$", "canonical": "gpt-6-astra-fast" },
+    { "pattern": "^gpt-6-astra(?:-(?:none|low|medium|high|xhigh|max|ultra))?$", "canonical": "gpt-6-astra" },
     { "pattern": "^gpt-5\\.6-terra(?:-(?:none|low|medium|high|xhigh|max))?-fast$", "canonical": "gpt-5.6-terra-fast" },
     { "pattern": "^gpt-5\\.6-terra(?:-(?:none|low|medium|high|xhigh|max))?$", "canonical": "gpt-5.6-terra" },
     { "pattern": "^gpt-5\\.6-luna(?:-(?:none|low|medium|high|xhigh|max))?-fast$", "canonical": "gpt-5.6-luna-fast" },
@@ -287,6 +308,8 @@
     { "pattern": "(?i)^(?:Cursor )?Grok 4\\.5 Fast \\(Auto[^)]*\\)$", "canonical": "grok-4.5-fast" },
     { "pattern": "(?i)^(?:Cursor )?Grok 4\\.5 \\(Auto[^)]*\\)$", "canonical": "grok-4.5" },
     { "pattern": "(?i)^(?:Claude )?Haiku 4\\.5 \\(Auto[^)]*\\)$", "canonical": "claude-haiku-4-5" },
+    { "pattern": "(?i)^(?:Claude )?Opus 4\\.6(?: \\([^)]*\\))?$", "canonical": "claude-opus-4-6" },
+    { "pattern": "(?i)^(?:Claude )?Sonnet 4\\.6(?: \\([^)]*\\))?$", "canonical": "claude-sonnet-4-6" },
     { "pattern": "(?i)^(?:Claude )?Opus 4\\.8 \\(Auto[^)]*\\)$", "canonical": "claude-opus-4-8" },
     { "pattern": "(?i)^(?:Claude )?Opus 5 \\(Auto[^)]*\\)$", "canonical": "claude-opus-5" },
     { "pattern": "(?i)^(?:Claude )?Sonnet 5 \\(Auto[^)]*\\)$", "canonical": "claude-sonnet-5" },
@@ -294,17 +317,21 @@
     { "pattern": "(?i)^(?:Claude )?Fable 5 \\(Auto[^)]*\\)$", "canonical": "claude-fable-5" },
     { "pattern": "(?i)^GPT-5\\.5 \\(Auto[^)]*\\)$", "canonical": "gpt-5.5" },
     { "pattern": "(?i)^GPT-5\\.6 Sol \\(Auto[^)]*\\)$", "canonical": "gpt-5.6-sol" },
+    { "pattern": "(?i)^GPT-6 Astra \\(Auto[^)]*\\)$", "canonical": "gpt-6-astra" },
     { "pattern": "(?i)^GPT-5\\.6 Terra \\(Auto[^)]*\\)$", "canonical": "gpt-5.6-terra" },
     { "pattern": "(?i)^GPT-5\\.6 Luna \\(Auto[^)]*\\)$", "canonical": "gpt-5.6-luna" },
-    { "pattern": "(?i)^Gemini 3\\.1 Pro \\(Auto[^)]*\\)$", "canonical": "gemini-3.1-pro-preview" },
-    { "pattern": "(?i)^Gemini 3\\.6 Flash \\(Auto[^)]*\\)$", "canonical": "gemini-3.6-flash" },
-    { "pattern": "(?i)^Gemini 3\\.7 Flash \\(Auto[^)]*\\)$", "canonical": "gemini-3.7-flash" },
+    { "pattern": "(?i)^Gemini 3\\.1 Pro(?: \\([^)]*\\))?$", "canonical": "gemini-3.1-pro-preview" },
+    { "pattern": "(?i)^Gemini 3\\.5 Flash(?: \\([^)]*\\))?$", "canonical": "gemini-3.5-flash" },
+    { "pattern": "(?i)^Gemini 3\\.6 Flash(?: \\([^)]*\\))?$", "canonical": "gemini-3.6-flash" },
+    { "pattern": "(?i)^Gemini 3\\.7 Flash(?: \\([^)]*\\))?$", "canonical": "gemini-3.7-flash" },
+    { "pattern": "(?i)^Gemini 3\\.8 Flash(?: \\([^)]*\\))?$", "canonical": "gemini-3.8-flash" },
     { "pattern": "(?i)^GLM 5\\.2 \\(Auto[^)]*\\)$", "canonical": "glm-5.2" },
     { "pattern": "(?i)^GLM 5\\.3 \\(Auto[^)]*\\)$", "canonical": "glm-5.3" },
     { "pattern": "(?i)^Kimi K3 \\(Auto[^)]*\\)$", "canonical": "kimi-k3" }
   ],
   "fallback_models": {
     "codex": [
+      "gpt-6-astra",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",

@@ -32,7 +32,13 @@ If neither is available you'll see *Start Antigravity or run `agy` and try again
 
 ## Spend and usage history
 
-OpenUsage reads generation token counts, including the fixed system prompt, from `~/.gemini/antigravity-cli/conversations/*.db` and estimates their API-equivalent cost using the shared [model pricing](../pricing.md). Today, Yesterday, and Last 30 Days contribute to the Total Spend card alongside the other providers. These are estimates, not charges from your Antigravity subscription, and conversation data never leaves your Mac. Previously scanned conversations are reused on refresh, so only new generation records need to be read.
+OpenUsage reads generation token counts, including the fixed system prompt, from every `~/.gemini/antigravity*/conversations` store (the `agy` CLI, the Antigravity IDE, the Antigravity 2.0 app, and ACP sessions) and estimates their API-equivalent cost using the shared [model pricing](../pricing.md). Today, Yesterday, and Last 30 Days contribute to the Total Spend card alongside the other providers. These are estimates, not charges from your Antigravity subscription, and conversation data never leaves your Mac. Previously scanned conversations are reused on refresh, so only new generation records need to be read.
+
+When the model picker is on its default, Antigravity logs a placeholder ID (`gemini-default`, `gemini-pro-default`) and records the model that actually served the turn as a display label such as "Gemini 3.1 Pro (High)". OpenUsage prices those turns by that label, falling back to the placeholder ID when the label has no known rate (`gemini-pro-default` prices as Gemini 3.1 Pro). Anything that still cannot be priced remains visible in the unknown-models warning.
+
+The model breakdown groups by model family: effort variants such as `gemini-3.1-pro-low`, display labels, and placeholder IDs all count under one `gemini-3.1-pro` row, since they bill at the same rate. Names OpenUsage cannot map keep their raw text. Prompt-context records that carry no model and no generated tokens are not generations and are ignored.
+
+Subagents that Antigravity launches with a model tier (`flash_lite`, `flash`, `pro`) are logged with a `-tiered` model ID, such as `gemini-3.7-flash-tiered`. That is the same model at the same rate, so it counts under the base model's row.
 
 The transcript logs don't include token accounting, so they aren't used. Missing or unpriced models aren't assigned an invented price, and unusually large generation records are skipped with a warning to keep memory usage bounded.
 

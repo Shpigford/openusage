@@ -41,6 +41,23 @@ final class CredentialSystemClientIntegrityTests: XCTestCase {
         XCTAssertEqual(runner.callCount, 1)
         XCTAssertTrue(runner.lastArguments.contains("-readonly"))
     }
+
+    func testSQLiteQueryRetriesWALOpenFailureWithQueryOnlyConnection() throws {
+        let database = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenUsageTests.wal.\(UUID().uuidString).sqlite")
+        try Data().write(to: database)
+        defer { try? FileManager.default.removeItem(at: database) }
+        let runner = CredentialCountingProcessRunner()
+        runner.readOnlyOpenFails = true
+
+        XCTAssertNil(
+            try SQLiteCLIAccessor(processRunner: runner)
+                .queryValue(path: database.path, sql: "SELECT value FROM ItemTable LIMIT 1")
+        )
+        XCTAssertEqual(runner.callCount, 2)
+        XCTAssertFalse(runner.lastArguments.contains("-readonly"))
+        XCTAssertTrue(runner.lastArguments.contains("PRAGMA query_only = ON"))
+    }
 }
 
 @MainActor
@@ -212,7 +229,7 @@ final class AntigravityCredentialCacheIntegrityTests: XCTestCase {
             authStore: AntigravityAuthStore(keychain: keychain, files: files, now: { fixedNow }),
             usageClient: AntigravityUsageClient(lsHTTP: http, http: http),
             discovery: LanguageServerDiscovery(processRunner: CredentialEmptyProcessRunner()),
-            dbUsageScanner: AntigravityDbUsageScanner(conversationsDirectory: { "/nonexistent-antigravity-tests" }),
+            dbUsageScanner: AntigravityDbUsageScanner(conversationsDirectories: { ["/nonexistent-antigravity-tests"] }),
             now: { fixedNow }
         )
     }
@@ -228,6 +245,8 @@ final class AntigravityCredentialCacheIntegrityTests: XCTestCase {
 private final class CredentialCountingProcessRunner: ProcessRunning, @unchecked Sendable {
     private(set) var callCount = 0
     private(set) var lastArguments: [String] = []
+    /// Fails every `-readonly` invocation the way sqlite3 does on a WAL database with an unreadable -shm.
+    var readOnlyOpenFails = false
 
     func run(
         executable: String,
@@ -237,6 +256,9 @@ private final class CredentialCountingProcessRunner: ProcessRunning, @unchecked 
     ) throws -> ProcessResult {
         callCount += 1
         lastArguments = arguments
+        if readOnlyOpenFails, arguments.contains("-readonly") {
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "Error: unable to open database file (14)")
+        }
         return ProcessResult(exitCode: 0, stdout: "", stderr: "")
     }
 }

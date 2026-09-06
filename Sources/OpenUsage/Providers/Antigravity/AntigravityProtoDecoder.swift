@@ -9,9 +9,11 @@ enum AntigravityProtoDecoder {
     }
 
     struct GenerationEvent: Equatable, Sendable {
-        static let unknownModel = "Unknown Antigravity Model"
-
-        var model: String
+        /// Field 19, Antigravity's internal model ID (`gemini-3.7-flash-high`, or a placeholder such as
+        /// `gemini-pro-default` when the picker is on its default choice).
+        var modelID: String?
+        /// Field 21, the product label for the model that served the turn ("Gemini 3.1 Pro (High)").
+        var label: String?
         var inputTokens: Int
         var outputTokens: Int
         var cacheReadTokens: Int
@@ -84,13 +86,38 @@ enum AntigravityProtoDecoder {
         return value
     }
 
-    /// `gen_metadata.data` wraps its event in field 1: model 19, token counts 4, and timestamp 9.
-    /// An absent model remains visibly unpriced instead of silently borrowing another Gemini rate.
-    static func generationEvent(from blob: [UInt8]) -> GenerationEvent? {
+    /// Seconds from a `google.protobuf.Timestamp` message (field 1), rejecting zero and overflow.
+    private static func timestampSeconds(in message: [UInt8]) -> Int64? {
+        guard let seconds = varintField(1, in: message),
+              let timestampSeconds = Int64(exactly: seconds), timestampSeconds > 0
+        else { return nil }
+        return timestampSeconds
+    }
+
+    /// The step's wall-clock time from `steps.metadata`, whose field 1 is a Timestamp message.
+    static func timestamp(fromStepMetadata stepMetadata: [UInt8]) -> Int64? {
+        bytesField(1, in: stepMetadata).flatMap(timestampSeconds(in:))
+    }
+
+    private static func trimmedString(_ number: UInt32, in message: [UInt8]) -> String? {
+        bytesField(number, in: message)
+            .flatMap { String(bytes: $0, encoding: .utf8) }?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+    }
+
+    /// `gen_metadata.data` wraps its event in field 1: internal model ID 19, display label 21, token
+    /// counts 4, and optional timing 9 (whose field 4 is a Timestamp message). Which name to price by is
+    /// the scanner's call; the decoder only extracts. Rows with neither ID nor label that carry only a
+    /// system-prompt count are bookkeeping (prompt-context records), not generations, and produce no
+    /// event. `stepMetadata` is the correlated `steps.metadata` blob, consulted only when the embedded
+    /// timing is missing; it is the sole fallback because file modification times move on every write.
+    /// With neither timestamp the event is dropped rather than assigned to a day.
+    static func generationEvent(from blob: [UInt8], stepMetadata: [UInt8]? = nil) -> GenerationEvent? {
         guard let wrapped = bytesField(1, in: blob) else { return nil }
 
-        let decodedModel = bytesField(19, in: wrapped).flatMap { String(bytes: $0, encoding: .utf8) }
-        let model = decodedModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelID = trimmedString(19, in: wrapped)
+        let label = trimmedString(21, in: wrapped)
 
         guard let usage = bytesField(4, in: wrapped) else { return nil }
 
@@ -101,16 +128,21 @@ enum AntigravityProtoDecoder {
         else { return nil }
 
         let billableInputTokens = systemPromptTokens.addingReportingOverflow(inputTokens)
+        let generated = inputTokens != 0 || outputTokens != 0 || cacheReadTokens != 0
         guard !billableInputTokens.overflow,
-              billableInputTokens.partialValue != 0 || outputTokens != 0 || cacheReadTokens != 0,
-              let timingBytes = bytesField(9, in: wrapped),
-              let wallClockBytes = bytesField(4, in: timingBytes),
-              let timestamp = varintField(1, in: wallClockBytes),
-              let timestampSeconds = Int64(exactly: timestamp), timestampSeconds > 0
+              modelID != nil || label != nil || generated,
+              generated || billableInputTokens.partialValue != 0
+        else { return nil }
+
+        let embeddedTimestamp = bytesField(9, in: wrapped)
+            .flatMap { bytesField(4, in: $0) }
+            .flatMap(timestampSeconds(in:))
+        guard let timestampSeconds = embeddedTimestamp ?? stepMetadata.flatMap(timestamp(fromStepMetadata:))
         else { return nil }
 
         return GenerationEvent(
-            model: model.flatMap { $0.isEmpty ? nil : $0 } ?? GenerationEvent.unknownModel,
+            modelID: modelID,
+            label: label,
             inputTokens: billableInputTokens.partialValue,
             outputTokens: outputTokens,
             cacheReadTokens: cacheReadTokens,
